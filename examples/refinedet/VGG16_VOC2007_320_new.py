@@ -14,7 +14,28 @@ import subprocess
 # Add extra layers on top of a "base" network (e.g. VGGNet or ResNet).
 def AddExtraLayers(net, use_batchnorm=True, arm_source_layers=[], normalizations=[], lr_mult=1):
     use_relu = True
-
+    kwargs = {
+          'param': [
+              dict(lr_mult=1, decay_mult=1)],
+'convolution_param': dict(kernel_size=3,
+                          stride=1,
+                          pad=1,
+                          bias_filler=dict(type='constant'),
+                          weight_filler=dict(type='xavier'))
+          }
+    bn_kwargs = {
+          'param': [
+              dict(lr_mult=0, decay_mult=0),
+              dict(lr_mult=0, decay_mult=0),
+              dict(lr_mult=0, decay_mult=0)],
+          'eps': 0.001,
+          'moving_average_fraction': 0.999
+          }
+    sb_kwargs = {
+          'bias_term': True,
+          'filler': dict(value=1.0),
+          'bias_filler': dict(value=0.0),
+          } 
     # Add additional convolutional layers.
     # 320/32: 10 x 10
     from_layer = net.keys()[-1]
@@ -30,6 +51,8 @@ def AddExtraLayers(net, use_batchnorm=True, arm_source_layers=[], normalizations
     arm_source_layers.reverse()
     normalizations.reverse()
     num_p = 6
+    groups = [64,64,64,64,128,256,512]
+    num_outputs = groups
     for index, layer in enumerate(arm_source_layers):
         out_layer = layer
         if normalizations:
@@ -46,30 +69,59 @@ def AddExtraLayers(net, use_batchnorm=True, arm_source_layers=[], normalizations
         if num_p == 6:
             from_layer = out_layer
             out_layer = "TL{}_{}".format(num_p, 2)
-            ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 256, 3, 1, 1, lr_mult=lr_mult)
-
+            #ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 256, 3, 1, 1, lr_mult=lr_mult)
+            ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 256, 1, 0, 1, lr_mult=lr_mult)
             from_layer = out_layer
             out_layer = "P{}".format(num_p)
-            ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 256, 3, 1, 1, lr_mult=lr_mult)
+            ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, num_outputs[num_p], 1, 0, 1, lr_mult=lr_mult)
         else:
             from_layer = out_layer
             out_layer = "TL{}_{}".format(num_p, 2)
-            ConvBNLayer(net, from_layer, out_layer, use_batchnorm, False, 256, 3, 1, 1, lr_mult=lr_mult)
-
+            #ConvBNLayer(net, from_layer, out_layer, use_batchnorm, False, 256, 3, 1, 1, lr_mult=lr_mult)
+            ConvBNLayer(net, from_layer, out_layer, use_batchnorm, False, num_outputs[num_p], 1, 0, 1, lr_mult=lr_mult)
             from_layer = "P{}".format(num_p+1)
             out_layer = "P{}-up".format(num_p+1)
-            DeconvBNLayer(net, from_layer, out_layer, use_batchnorm, False, 256, 2, 0, 2, lr_mult=lr_mult)
-
-            from_layer = ["TL{}_{}".format(num_p, 2), "P{}-up".format(num_p+1)]
-            out_layer = "Elt{}".format(num_p)
+            #DeconvBNLayer(net, from_layer, out_layer, use_batchnorm, False, 256, 2, 0, 2, lr_mult=lr_mult)
+            net[out_layer] = L.Deconvolution(net[from_layer], convolution_param=
+                                             dict(kernel_size=4, stride=2, group=groups[num_p+1], num_output=num_outputs[num_p+1],
+                                                  pad=1, bias_term=False, weight_filler=dict(type='bilinear')), 
+                                             param=[dict(lr_mult=0, decay_mult=0)])
+            from_layer = out_layer
+            out_layer = "up_dw{}".format(num_p+1)
+            # add dw
+            net[out_layer] = L.Convolution(net[from_layer], group=groups[num_p+1], num_output=num_outputs[num_p+1], **kwargs)
+            from_layer1 = out_layer
+            out_layer1 = "up_dw{}_bn".format(num_p+1)
+            net[out_layer1] = L.BatchNorm(net[from_layer1], in_place=True, **bn_kwargs)
+            from_layer1 = out_layer1
+            out_layer1 = "up_dw{}_scale".format(num_p+1)
+            net[out_layer1] = L.Scale(net[from_layer1], in_place=True, **sb_kwargs)
+            from_layer1 = out_layer1
+            out_layer1 = "up_dw{}_relu".format(num_p+1)
+            net[out_layer1] = L.ReLU(net[from_layer1], in_place=True)
+            # add slice
+            from_layer = out_layer
+            out_layer1 = "up_dw{}_left".format(num_p+1) 
+            out_layer2 = "up_dw{}_right".format(num_p+1)
+            out_layer = "up_dw{}_slice".format(num_p+1)
+            net[out_layer1], net[out_layer2] = L.Slice(net[from_layer], name=out_layer, ntop=2, 
+                                                       slice_param=dict(axis=1, slice_point=num_outputs[num_p]))
+            from_layer1 = out_layer1
+            from_layer2 = out_layer2
+            out_layer = "up_dw{}_maxout".format(num_p+1)
+            # add max
+            net[out_layer] = L.Eltwise(net[from_layer1], net[from_layer2], eltwise_param=dict(operation=2))
+         
+            from_layer = ["TL{}_{}".format(num_p, 2), "up_dw{}_maxout".format(num_p+1)]
+            out_layer = "P{}".format(num_p)
             EltwiseLayer(net, from_layer, out_layer)
             relu_name = '{}_relu'.format(out_layer)
             net[relu_name] = L.ReLU(net[out_layer], in_place=True)
             out_layer = relu_name
 
-            from_layer = out_layer
-            out_layer = "P{}".format(num_p)
-            ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, 256, 3, 1, 1, lr_mult=lr_mult)
+            #from_layer = out_layer
+            #out_layer = "P{}".format(num_p)
+            #ConvBNLayer(net, from_layer, out_layer, use_batchnorm, use_relu, num_outputs[num_p], 1, 0, 1, lr_mult=lr_mult)
 
         num_p = num_p - 1
 
