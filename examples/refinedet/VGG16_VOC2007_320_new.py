@@ -295,16 +295,16 @@ else:
     base_lr = 0.00004
 
 # Modify the job name if you want.
-job_name = "refinedet_vgg16_{}".format(resize)
+job_name = "refinedet_mobilenet_{}".format(resize)
 # The name of the model. Modify it if you want.
 model_name = "VOC0712_{}".format(job_name)
 
 # Directory which stores the model .prototxt file.
-save_dir = "models/VGGNet/VOC0712/{}".format(job_name)
+save_dir = "models/MobileNet/VOC0712/{}".format(job_name)
 # Directory which stores the snapshot of models.
-snapshot_dir = "models/VGGNet/VOC0712/{}".format(job_name)
+snapshot_dir = "models/MobileNet/VOC0712/{}".format(job_name)
 # Directory which stores the job script and log file.
-job_dir = "jobs/VGGNet/VOC0712/{}".format(job_name)
+job_dir = "jobs/MobileNet/VOC0712/{}".format(job_name)
 # Directory which stores the detection results.
 output_result_dir = "{}/data/RefineDet/pascal/VOCdevkit/results/VOC2007/{}/Main".format(os.environ['HOME'], job_name)
 
@@ -321,7 +321,7 @@ job_file = "{}/{}.sh".format(job_dir, model_name)
 # Stores the test image names and sizes. Created by data/VOC0712/create_list.sh
 name_size_file = "data/VOC0712/test_name_size.txt"
 # The pretrained model. We use the Fully convolutional reduced (atrous) VGGNet.
-pretrain_model = "models/VGGNet/VGG_ILSVRC_16_layers_fc_reduced.caffemodel"
+pretrain_model = "models/MobileNet/mobilenet.caffemodel"
 # Stores LabelMapItem.
 label_map_file = "data/VOC0712/labelmap_voc.prototxt"
 
@@ -365,7 +365,7 @@ loss_param = {
 # conv5_3 ==> 20 x 20
 # fc7 ==> 10 x 10
 # conv6_2 ==> 5 x 5
-arm_source_layers = ['conv4_3', 'conv5_3', 'fc7', 'conv6_2']
+arm_source_layers = ['conv4_1/sep', 'conv5_5/sep', 'conv6/sep', 'conv6_2']
 odm_source_layers = ['P3', 'P4', 'P5', 'P6']
 min_sizes = [32, 64, 128, 256]
 max_sizes = [[], [], [], []]
@@ -477,7 +477,7 @@ net.data, net.label = CreateAnnotatedDataLayer(train_data, batch_size=batch_size
         train=True, output_label=True, label_map_file=label_map_file,
         transform_param=train_transform_param, batch_sampler=batch_sampler)
 
-VGGNetBody(net, from_layer='data', fully_conv=True, reduced=True, dilated=False, dropout=False)
+MobileNetBody(net, from_layer='data')
 
 AddExtraLayers(net, use_batchnorm, arm_source_layers, normalizations, lr_mult=lr_mult)
 arm_source_layers.reverse()
@@ -534,9 +534,9 @@ net.data, net.label = CreateAnnotatedDataLayer(test_data, batch_size=test_batch_
         train=False, output_label=True, label_map_file=label_map_file,
         transform_param=test_transform_param)
 
-VGGNetBody(net, from_layer='data', fully_conv=True, reduced=True, dilated=False, dropout=False)
+MobileNetBody(net, from_layer='data')
 
-arm_source_layers = ['conv4_3', 'conv5_3', 'fc7', 'conv6_2']
+arm_source_layers = ['conv4_1/sep', 'conv5_5/sep', 'conv6/sep', 'conv6_2']
 AddExtraLayers(net, use_batchnorm, arm_source_layers, normalizations, lr_mult=lr_mult)
 arm_source_layers.reverse()
 normalizations.reverse()
