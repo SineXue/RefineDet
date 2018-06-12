@@ -326,6 +326,112 @@ def ZFNetBody(net, from_layer, need_fc=True, fully_conv=False, reduced=False,
     return net
 
 
+def MobileBody(net, from_layer, num_output, pad=1, stride=1, kernel_size=3, group=1,
+                 conv_name='', bn_name='', scale_name='', relu_name='', freeze_layers=[]):
+    kwargs = {
+      'bias_term': False,
+      'param': [dict(lr_mult=0.1, decay_mult=0.1)],
+      'weight_filler': dict(type='msra'),
+      'bias_filler': dict(type='constant', value=0)
+    }
+    bn_kwargs = {
+      'param': [
+        dict(lr_mult=0, decay_mult=0),
+        dict(lr_mult=0, decay_mult=0),
+        dict(lr_mult=0, decay_mult=0)],
+    }
+    sb_kwargs = {
+      'bias_term': True,
+      'param': [
+        dict(lr_mult=0.1, decay_mult=0),
+        dict(lr_mult=0.2, decay_mult=0)],
+      'filler': dict(value=1.0),
+      'bias_filler': dict(value=0.0),
+    }
+    assert from_layer in net.keys()
+    if group != 1:
+      net[conv_name] = L.Convolution(net[from_layer], num_output=num_output, group=group, engine=1,
+                                     pad=pad, stride=stride, kernel_size=kernel_size, **kwargs)
+    else:
+      net[conv_name] = L.Convolution(net[from_layer], num_output=num_output,
+                                     pad=pad, stride=stride, kernel_size=kernel_size, **kwargs)
+    net[bn_name] = L.BatchNorm(net[conv_name], in_place=True, **bn_kwargs)
+    net[scale_name] = L.Scale(net[bn_name], in_place=True, **sb_kwargs)
+    net[relu_name] = L.ReLU(net[scale_name], in_place=True)
+
+def MobileNetBody(net, from_layer):
+    conv_name = 'conv1'
+    bn_name = '{}/bn'.format(conv_name)
+    scale_name = '{}/scale'.format(conv_name)
+    relu_name = 'relu1'
+    assert from_layer in net.keys()
+    MobileBody(net, from_layer, num_output=32, pad=1, stride=2, kernel_size=3,
+               conv_name=conv_name, bn_name=bn_name, scale_name=scale_name, relu_name=relu_name)
+    from_layer = relu_name
+    num_output = 32
+    for i in xrange(2, 5):
+      for j in xrange(1, 3):
+        conv_name = 'conv{}_{}/dw'.format(i, j)
+        bn_name = '{}/bn'.format(conv_name)
+        scale_name = '{}/scale'.format(conv_name)
+        relu_name = 'relu{}_{}/dw'.format(i, j)
+        if j == 2:
+          stride = 2
+        else:
+          stride = 1
+        MobileBody(net, from_layer, num_output=num_output, pad=1, stride=stride, kernel_size=3, group=num_output,
+                   conv_name=conv_name, bn_name=bn_name, scale_name=scale_name, relu_name=relu_name)
+        from_layer = relu_name
+        conv_name = 'conv{}_{}/sep'.format(i, j)
+        bn_name = '{}/bn'.format(conv_name)
+        scale_name = '{}/scale'.format(conv_name)
+        relu_name = 'relu{}_{}/sep'.format(i, j)
+        if num_output == 32 or j == 2:
+          num_output = num_output * 2
+        MobileBody(net, from_layer, num_output=num_output, pad=0, stride=1, kernel_size=1,
+                   conv_name=conv_name, bn_name=bn_name, scale_name=scale_name, relu_name=relu_name)
+        from_layer = relu_name
+    # conv5
+    for j in xrange(1, 7):
+      conv_name = 'conv{}_{}/dw'.format(5, j)
+      bn_name = '{}/bn'.format(conv_name)
+      scale_name = '{}/scale'.format(conv_name)
+      relu_name = 'relu{}_{}/dw'.format(5, j)
+      if j == 6:
+        stride = 2
+      else:
+        stride = 1
+      MobileBody(net, from_layer, num_output=num_output, pad=1, stride=stride, kernel_size=3, group=num_output,
+                 conv_name=conv_name, bn_name=bn_name, scale_name=scale_name, relu_name=relu_name)
+      from_layer = relu_name
+      conv_name = 'conv{}_{}/sep'.format(5, j)
+      bn_name = '{}/bn'.format(conv_name)
+      scale_name = '{}/scale'.format(conv_name)
+      relu_name = 'relu{}_{}/sep'.format(5, j)
+      if j == 6:
+        num_output = num_output * 2
+      MobileBody(net, from_layer, num_output=num_output, pad=0, stride=1, kernel_size=1,
+                 conv_name=conv_name, bn_name=bn_name, scale_name=scale_name, relu_name=relu_name)
+      from_layer = relu_name
+    # conv6
+    conv_name = 'conv6/dw'
+    bn_name = '{}/bn'.format(conv_name)
+    scale_name = '{}/scale'.format(conv_name)
+    relu_name = 'relu6/dw'
+
+    MobileBody(net, from_layer, num_output=num_output, pad=1, stride=1, kernel_size=3, group=num_output,
+               conv_name=conv_name, bn_name=bn_name, scale_name=scale_name, relu_name=relu_name)
+    from_layer = relu_name
+    conv_name = 'conv6/sep'
+    bn_name = '{}/bn'.format(conv_name)
+    scale_name = '{}/scale'.format(conv_name)
+    relu_name = 'relu6/sep'
+    MobileBody(net, from_layer, num_output=num_output, pad=0, stride=1, kernel_size=1,
+               conv_name=conv_name, bn_name=bn_name, scale_name=scale_name, relu_name=relu_name)
+
+    return net
+
+
 def VGGNetBody(net, from_layer, need_fc=True, fully_conv=False, reduced=False,
         dilated=False, nopool=False, dropout=True, freeze_layers=[], dilate_pool4=False):
     kwargs = {
